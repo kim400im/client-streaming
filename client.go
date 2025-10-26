@@ -39,6 +39,8 @@ var otherPeerAddr *net.UDPAddr
 var udpConn *net.UDPConn // udpConn을 전역 변수로 변경
 var peerConnection *webrtc.PeerConnection
 
+var punchingAttempts int
+
 // 사설 IP 주소 찾기 함수
 func getPrivateIP() string {
 	conn, err := net.Dial("udp", "8.8.8.8:80")
@@ -120,44 +122,38 @@ func main() {
 
 			peerInfo := receivedPeers[0]
 
-			// 사설 IP 우선, 실패하면 공인 IP 시도
-			var peerAddrStr string
-			if peerInfo["private_ip"] != "" && isPrivateIP(peerInfo["private_ip"]) {
-				peerAddrStr = peerInfo["private_ip"] + ":" + peerInfo["port"]
-				log.Printf("상대 피어 사설IP 주소 수신: %s", peerAddrStr)
-			} else {
-				peerAddrStr = peerInfo["public_ip"] + ":" + peerInfo["port"]
-				log.Printf("상대 피어 공인IP 주소 수신: %s", peerAddrStr)
-			}
-
-			if otherPeerAddr != nil && otherPeerAddr.String() == peerAddrStr {
-				continue
-			}
-
-			peerAddr, err := net.ResolveUDPAddr("udp", peerAddrStr)
-			if err != nil {
-				log.Println("잘못된 UDP 주소:", err)
-				// 사설 IP 실패 시 공인 IP로 재시도
-				if peerInfo["public_ip"] != "" {
-					peerAddrStr = peerInfo["public_ip"] + ":" + peerInfo["port"]
-					peerAddr, err = net.ResolveUDPAddr("udp", peerAddrStr)
-					if err != nil {
-						log.Println("공인 IP도 실패:", err)
-						continue
-					}
-				} else {
+			// 공인 IP로 먼저 시도
+			if peerInfo["public_ip"] != "" {
+				peerAddrStr := peerInfo["public_ip"] + ":" + peerInfo["port"]
+				log.Printf("공인IP 시도: %s", peerAddrStr)
+				peerAddr, err := net.ResolveUDPAddr("udp", peerAddrStr)
+				if err == nil {
+					otherPeerAddr = peerAddr
+					punchingAttempts = 0
 					continue
 				}
 			}
-			otherPeerAddr = peerAddr
+
+			// 공인 IP 실패 시 사설 IP로 시도
+			if peerInfo["private_ip"] != "" && isPrivateIP(peerInfo["private_ip"]) {
+				peerAddrStr := peerInfo["private_ip"] + ":" + peerInfo["port"]
+				log.Printf("공인IP 실패, 사설IP 시도: %s", peerAddrStr)
+				peerAddr, err := net.ResolveUDPAddr("udp", peerAddrStr)
+				if err == nil {
+					otherPeerAddr = peerAddr
+					punchingAttempts = 0
+					continue
+				}
+			}
 
 			log.Println("지속적인 UDP 홀 펀칭 시도...")
 			go func() {
-				for i := 0; i < 10; i++ {
+				for i := 0; i < 10 && punchingAttempts < 3; i++ {
 					if otherPeerAddr == nil {
 						break
 					}
 					udpConn.WriteToUDP([]byte("펀칭!"), otherPeerAddr)
+					punchingAttempts++
 					time.Sleep(100 * time.Millisecond)
 				}
 			}()
