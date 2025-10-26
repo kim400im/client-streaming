@@ -11,8 +11,10 @@ package main
 import (
 	"bufio" // JSON 처리를 위해 남겨둡니다.
 	"encoding/json"
+	"io"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"strconv" // 숫자 <-> 문자열 변환을 위해 필수
 	"strings"
@@ -86,16 +88,16 @@ func main() {
 	myUdpPort := strconv.Itoa(udpAddr.Port) // 정수형 포트를 문자열로 변환
 	log.Printf("내 UDP 리스닝 포트: %s", myUdpPort)
 
-	// *** 수정: 사설 IP도 함께 전송 ***
 	privateIP := getPrivateIP()
+	publicIP := getPublicIP() // 실제 공인 IP 가져오기
+
 	addrInfo := UDPAddressInfo{
-		PublicIP:  "", // 서버가 클라이언트의 공인 IP를 알아낼 거니까 빈 값
+		PublicIP:  publicIP, // 빈 값 대신 실제 공인 IP
 		PrivateIP: privateIP,
 		Port:      myUdpPort,
 	}
 	ws.WriteJSON(addrInfo)
-	log.Printf("서버에 전송 - 사설IP: %s, 포트: %s", privateIP, myUdpPort)
-	// *** 수정 끝 ***
+	log.Printf("서버에 전송 - 공인IP: %s, 사설IP: %s, 포트: %s", publicIP, privateIP, myUdpPort)
 
 	// 서버에게 내 UDP 포트 번호를 알려줍니다.
 	// msg := Message{Body: myUdpPort}
@@ -218,4 +220,14 @@ func isPrivateIP(ip string) bool {
 		}
 	}
 	return false
+}
+
+func getPublicIP() string {
+	resp, err := http.Get("https://api.ipify.org?format=text")
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	return strings.TrimSpace(string(body))
 }
