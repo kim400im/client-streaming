@@ -4,6 +4,8 @@
 // 윈도우용 빌드 go build -o client-windows.exe .
 // 윈도우 실행은 client-windows.exe
 
+// 리눅스 go build -o client-linux .
+
 package main
 
 import (
@@ -13,7 +15,8 @@ import (
 	"net"
 	"os"
 	"strconv" // 숫자 <-> 문자열 변환을 위해 필수
-	"time"    // 지속적인 펀칭을 위해 필수
+	"strings"
+	"time" // 지속적인 펀칭을 위해 필수
 
 	"github.com/gorilla/websocket"
 	"github.com/pion/webrtc/v4"
@@ -24,10 +27,28 @@ type Message struct {
 	Body string `json:"body"`
 }
 
+// 사설 IP 정보를 포함한 구조체 추가
+type UDPAddressInfo struct {
+	PublicIP  string `json:"public_ip"`
+	PrivateIP string `json:"private_ip"`
+	Port      string `json:"port"`
+}
+
 var otherPeerAddr *net.UDPAddr
 
 var udpConn *net.UDPConn // udpConn을 전역 변수로 변경
 var peerConnection *webrtc.PeerConnection
+
+// 사설 IP 주소 찾기 함수
+func getPrivateIP() string {
+	conn, err := net.Dial("udp", "8.8.8.8:80")
+	if err != nil {
+		return "127.0.0.1"
+	}
+	defer conn.Close()
+	localAddr := conn.LocalAddr().(*net.UDPAddr)
+	return localAddr.IP.String()
+}
 
 // 메시지 타입을 명확히 하기 위해 래퍼 구조체 사용
 type SignalMessage struct {
@@ -63,22 +84,33 @@ func main() {
 	myUdpPort := strconv.Itoa(udpAddr.Port) // 정수형 포트를 문자열로 변환
 	log.Printf("내 UDP 리스닝 포트: %s", myUdpPort)
 
+	// *** 수정: 사설 IP도 함께 전송 ***
+	privateIP := getPrivateIP()
+	addrInfo := UDPAddressInfo{
+		PublicIP:  "", // 서버가 클라이언트의 공인 IP를 알아낼 거니까 빈 값
+		PrivateIP: privateIP,
+		Port:      myUdpPort,
+	}
+	ws.WriteJSON(addrInfo)
+	log.Printf("서버에 전송 - 사설IP: %s, 포트: %s", privateIP, myUdpPort)
+	// *** 수정 끝 ***
+
 	// 서버에게 내 UDP 포트 번호를 알려줍니다.
-	msg := Message{Body: myUdpPort}
-	ws.WriteJSON(msg)
+	// msg := Message{Body: myUdpPort}
+	// ws.WriteJSON(msg)
 	// *** 수정 끝 ***
 
 	go func() {
 		for {
 			// *** 최종 수정본: 주소 목록 처리 및 지속적인 펀칭 ***
-			var receivedAddrs []string
-			err := ws.ReadJSON(&receivedAddrs)
+			var receivedPeers []map[string]string
+			err := ws.ReadJSON(&receivedPeers)
 			if err != nil {
 				log.Println("WebSocket 읽기 에러:", err)
 				return
 			}
 
-			if len(receivedAddrs) == 0 {
+			if len(receivedPeers) == 0 {
 				if otherPeerAddr != nil {
 					log.Println("상대 피어가 나갔습니다.")
 					otherPeerAddr = nil
@@ -86,17 +118,36 @@ func main() {
 				continue
 			}
 
-			peerAddrStr := receivedAddrs[0]
+			peerInfo := receivedPeers[0]
+
+			// 사설 IP 우선, 실패하면 공인 IP 시도
+			var peerAddrStr string
+			if peerInfo["private_ip"] != "" && isPrivateIP(peerInfo["private_ip"]) {
+				peerAddrStr = peerInfo["private_ip"] + ":" + peerInfo["port"]
+				log.Printf("상대 피어 사설IP 주소 수신: %s", peerAddrStr)
+			} else {
+				peerAddrStr = peerInfo["public_ip"] + ":" + peerInfo["port"]
+				log.Printf("상대 피어 공인IP 주소 수신: %s", peerAddrStr)
+			}
 
 			if otherPeerAddr != nil && otherPeerAddr.String() == peerAddrStr {
 				continue
 			}
 
-			log.Printf("상대 피어 주소 수신: %s", peerAddrStr)
 			peerAddr, err := net.ResolveUDPAddr("udp", peerAddrStr)
 			if err != nil {
 				log.Println("잘못된 UDP 주소:", err)
-				continue
+				// 사설 IP 실패 시 공인 IP로 재시도
+				if peerInfo["public_ip"] != "" {
+					peerAddrStr = peerInfo["public_ip"] + ":" + peerInfo["port"]
+					peerAddr, err = net.ResolveUDPAddr("udp", peerAddrStr)
+					if err != nil {
+						log.Println("공인 IP도 실패:", err)
+						continue
+					}
+				} else {
+					continue
+				}
 			}
 			otherPeerAddr = peerAddr
 
@@ -139,4 +190,35 @@ func main() {
 			log.Println("아직 상대 피어가 연결되지 않았습니다.")
 		}
 	}
+}
+
+// 사설 IP 판별 함수
+func isPrivateIP(ip string) bool {
+	privateRanges := []string{
+		"10.",
+		"172.16.",
+		"172.17.",
+		"172.18.",
+		"172.19.",
+		"172.20.",
+		"172.21.",
+		"172.22.",
+		"172.23.",
+		"172.24.",
+		"172.25.",
+		"172.26.",
+		"172.27.",
+		"172.28.",
+		"172.29.",
+		"172.30.",
+		"172.31.",
+		"192.168.",
+		"127.",
+	}
+	for _, r := range privateRanges {
+		if strings.HasPrefix(ip, r) {
+			return true
+		}
+	}
+	return false
 }
