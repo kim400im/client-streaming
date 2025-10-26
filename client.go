@@ -91,6 +91,8 @@ func main() {
 	privateIP := getPrivateIP()
 	publicIP := getPublicIP() // 실제 공인 IP 가져오기
 
+	myPublicIP := publicIP
+
 	addrInfo := UDPAddressInfo{
 		PublicIP:  publicIP, // 빈 값 대신 실제 공인 IP
 		PrivateIP: privateIP,
@@ -123,31 +125,43 @@ func main() {
 			}
 
 			peerInfo := receivedPeers[0]
+			peerPublicIP := peerInfo["public_ip"]
+			peerPrivateIP := peerInfo["private_ip"]
+			peerPort := peerInfo["port"]
 
-			// 공인 IP를 우선으로 사용
-			peerAddrStr := peerInfo["public_ip"] + ":" + peerInfo["port"]
-			log.Printf("상대 피어 주소 수신: %s", peerAddrStr)
+			// ================== 👇 여기부터 교체 시작 👇 ==================
 
+			var targetIP string
+			var peerAddrStr string
+
+			// 1. 나의 공인 IP와 상대방의 공인 IP를 비교합니다.
+			if myPublicIP != "" && myPublicIP == peerPublicIP {
+				// 2. 같으면 같은 네트워크! 상대방의 '사설 IP'를 목표로 설정합니다.
+				targetIP = peerPrivateIP
+				log.Printf("같은 네트워크 감지. 사설 IP(%s)로 연결합니다.", targetIP)
+			} else {
+				// 3. 다르면 다른 네트워크! 상대방의 '공인 IP'를 목표로 설정합니다.
+				targetIP = peerPublicIP
+				log.Printf("다른 네트워크 감지. 공인 IP(%s)로 연결합니다.", targetIP)
+			}
+
+			// 4. 결정된 IP와 포트를 조합해 최종 주소를 만듭니다.
+			peerAddrStr = targetIP + ":" + peerPort
+
+			// 이전에 연결 시도했던 주소와 같다면 건너뜁니다.
 			if otherPeerAddr != nil && otherPeerAddr.String() == peerAddrStr {
 				continue
 			}
 
+			log.Printf("최종 연결 시도 주소: %s", peerAddrStr)
+
 			peerAddr, err := net.ResolveUDPAddr("udp", peerAddrStr)
 			if err != nil {
-				log.Println("공인 IP 연결 실패:", err)
-				// 공인 IP 실패 시 사설 IP로 재시도
-				if peerInfo["private_ip"] != "" {
-					peerAddrStr = peerInfo["private_ip"] + ":" + peerInfo["port"]
-					peerAddr, err = net.ResolveUDPAddr("udp", peerAddrStr)
-					if err != nil {
-						log.Println("사설 IP도 실패:", err)
-						continue
-					}
-					log.Printf("공인 IP 실패, 사설 IP로 전환: %s", peerAddrStr)
-				} else {
-					continue
-				}
+				log.Printf("주소 (%s) 해석 실패: %v", peerAddrStr, err)
+				continue
 			}
+
+			// ================== 👆 여기까지 교체 끝 👆 ==================
 			otherPeerAddr = peerAddr
 			punchingAttempts = 0
 
