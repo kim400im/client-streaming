@@ -122,42 +122,43 @@ func main() {
 
 			peerInfo := receivedPeers[0]
 
-			// 공인 IP로 먼저 시도
-			if peerInfo["public_ip"] != "" {
-				peerAddrStr := peerInfo["public_ip"] + ":" + peerInfo["port"]
-				log.Printf("공인IP 시도: %s", peerAddrStr)
-				peerAddr, err := net.ResolveUDPAddr("udp", peerAddrStr)
-				if err == nil {
-					otherPeerAddr = peerAddr
-					punchingAttempts = 0
-					continue
-				}
+			// 공인 IP를 우선으로 사용
+			peerAddrStr := peerInfo["public_ip"] + ":" + peerInfo["port"]
+			log.Printf("상대 피어 주소 수신: %s", peerAddrStr)
+
+			if otherPeerAddr != nil && otherPeerAddr.String() == peerAddrStr {
+				continue
 			}
 
-			// 공인 IP 실패 시 사설 IP로 시도
-			if peerInfo["private_ip"] != "" && isPrivateIP(peerInfo["private_ip"]) {
-				peerAddrStr := peerInfo["private_ip"] + ":" + peerInfo["port"]
-				log.Printf("공인IP 실패, 사설IP 시도: %s", peerAddrStr)
-				peerAddr, err := net.ResolveUDPAddr("udp", peerAddrStr)
-				if err == nil {
-					otherPeerAddr = peerAddr
-					punchingAttempts = 0
+			peerAddr, err := net.ResolveUDPAddr("udp", peerAddrStr)
+			if err != nil {
+				log.Println("공인 IP 연결 실패:", err)
+				// 공인 IP 실패 시 사설 IP로 재시도
+				if peerInfo["private_ip"] != "" {
+					peerAddrStr = peerInfo["private_ip"] + ":" + peerInfo["port"]
+					peerAddr, err = net.ResolveUDPAddr("udp", peerAddrStr)
+					if err != nil {
+						log.Println("사설 IP도 실패:", err)
+						continue
+					}
+					log.Printf("공인 IP 실패, 사설 IP로 전환: %s", peerAddrStr)
+				} else {
 					continue
 				}
 			}
+			otherPeerAddr = peerAddr
+			punchingAttempts = 0
 
 			log.Println("지속적인 UDP 홀 펀칭 시도...")
 			go func() {
-				for i := 0; i < 10 && punchingAttempts < 3; i++ {
+				for i := 0; i < 10; i++ {
 					if otherPeerAddr == nil {
 						break
 					}
 					udpConn.WriteToUDP([]byte("펀칭!"), otherPeerAddr)
-					punchingAttempts++
 					time.Sleep(100 * time.Millisecond)
 				}
 			}()
-			// *** 수정 끝 ***
 		}
 	}()
 
