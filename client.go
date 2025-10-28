@@ -184,23 +184,66 @@ func listenUDP() {
 	}
 }
 
-// 사용자 입력을 받아 연결된 모든 피어에게 메시지 전송
 func handleUserInput() {
-	log.Println("채팅 시작 (메시지 입력 후 Enter)")
+	// 사용 가능한 명령어를 안내합니다.
+	log.Println("명령어: chat [메시지] 또는 peers")
+	// "> " 프롬프트를 같은 줄에 표시하기 위해 fmt.Print 사용
+	fmt.Print("> ")
+
 	scanner := bufio.NewScanner(os.Stdin)
 	for scanner.Scan() {
-		text := scanner.Text()
+		input := scanner.Text()
 
-		peersMux.Lock()
-		if len(peers) == 0 {
-			log.Println("아직 연결된 피어가 없습니다.")
-		} else {
-			log.Printf("%d명의 피어에게 메시지 전송: %s", len(peers), text)
-			// 연결된 모든 피어에게 메시지 브로드캐스트
-			for _, peerAddr := range peers {
-				udpConn.WriteToUDP([]byte(text), peerAddr)
+		// 1. 입력을 공백 기준으로 최대 2개로 나눕니다. (명령어 + 나머지 내용)
+		parts := strings.SplitN(input, " ", 2)
+		command := parts[0]
+
+		// 2. switch 문을 사용해 첫 단어(명령어)에 따라 분기합니다.
+		switch command {
+		case "chat":
+			if len(parts) < 2 {
+				log.Println("사용법: chat [보낼 메시지]")
+				break // switch 문 종료
 			}
+			text := parts[1]
+
+			peersMux.Lock()
+			if len(peers) == 0 {
+				log.Println("아직 연결된 피어가 없습니다.")
+			} else {
+				log.Printf("%d명의 피어에게 메시지 전송: %s", len(peers), text)
+				// 연결된 모든 피어에게 메시지 브로드캐스트
+				for _, peerAddr := range peers {
+					udpConn.WriteToUDP([]byte(text), peerAddr)
+				}
+			}
+			peersMux.Unlock()
+
+		case "peers":
+			// `peers` 명령어를 처리하는 새로운 case
+			peersMux.Lock()
+			if len(peers) == 0 {
+				log.Println("연결된 피어가 없습니다.")
+			} else {
+				log.Printf("--- 현재 연결된 피어 (%d명) ---", len(peers))
+				i := 1
+				for addrStr := range peers {
+					log.Printf("%d. %s", i, addrStr)
+					i++
+				}
+				log.Println("---------------------------")
+			}
+			peersMux.Unlock()
+
+		case "":
+			// 그냥 엔터만 쳤을 경우 아무것도 하지 않음
+
+		default:
+			// 정의되지 않은 명령어가 들어왔을 때
+			log.Printf("알 수 없는 명령어: '%s'. 'chat' 또는 'peers'를 사용하세요.", command)
 		}
-		peersMux.Unlock()
+
+		// 다음 입력을 위해 프롬프트 다시 표시
+		fmt.Print("> ")
 	}
 }
